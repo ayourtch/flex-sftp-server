@@ -11,6 +11,19 @@ use log::{LevelFilter, SetLoggerError};
 use popol::Sources;
 use syslog::{BasicLogger, Facility, Formatter3164};
 
+fn deq_get_u64(ideq: &mut VecDeque<u8>) -> Option<u64> {
+    let mut out: u64 = 0;
+    for _i in 0..8 {
+        out = out << 8;
+        let nxt = ideq.pop_front();
+        if nxt.is_none() {
+            return None;
+        }
+        out = out + (nxt.unwrap() as u64);
+    }
+    Some(out)
+}
+
 fn deq_get_u32(ideq: &mut VecDeque<u8>) -> Option<u32> {
     let mut out: u32 = 0;
     for _i in 0..4 {
@@ -46,6 +59,15 @@ fn deq_get_cstring(ideq: &mut VecDeque<u8>) -> Option<String> {
     let mut out = String::with_capacity(str_len);
     for _i in 0..str_len {
         out.push(ideq.pop_front()? as char);
+    }
+    Some(out)
+}
+
+fn deq_get_string(ideq: &mut VecDeque<u8>) -> Option<Vec<u8>> {
+    let str_len = deq_get_u32(ideq)? as usize;
+    let mut out = Vec::<u8>::with_capacity(str_len);
+    for _i in 0..str_len {
+        out.push(ideq.pop_front()?);
     }
     Some(out)
 }
@@ -92,6 +114,36 @@ const SSH2_FXF_APPEND: u32 = 0x00000004;
 const SSH2_FXF_CREAT: u32 = 0x00000008;
 const SSH2_FXF_TRUNC: u32 = 0x00000010;
 const SSH2_FXF_EXCL: u32 = 0x00000020;
+
+fn decode_attrib(ideq: &mut VecDeque<u8>) -> Option<Attrib> {
+    let mut a = Attrib {
+        ..Default::default()
+    };
+    a.flags = deq_get_u32(ideq)?;
+    if a.flags & SSH2_FILEXFER_ATTR_SIZE != 0 {
+        a.size = deq_get_u64(ideq)?;
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_UIDGID != 0 {
+        a.uid = deq_get_u32(ideq)?;
+        a.gid = deq_get_u32(ideq)?;
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS != 0 {
+        a.perm = deq_get_u32(ideq)?;
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_ACMODTIME != 0 {
+        a.atime = deq_get_u32(ideq)?;
+        a.mtime = deq_get_u32(ideq)?;
+    }
+
+    if a.flags & SSH2_FILEXFER_ATTR_EXTENDED != 0 {
+        let count = deq_get_u32(ideq)?;
+        for i in 0..count {
+            let atype = deq_get_cstring(ideq)?;
+            let adata = deq_get_string(ideq)?;
+        }
+    }
+    Some(a)
+}
 
 fn encode_attrib(odeq: &mut VecDeque<u8>, a: &Attrib) {
     deq_put_u32(odeq, a.flags);
@@ -174,7 +226,7 @@ const SSH2_FX_CONNECTION_LOST: u32 = 7;
 const SSH2_FX_OP_UNSUPPORTED: u32 = 8;
 const SSH2_FX_MAX: u32 = 8;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Attrib {
     flags: u32,
     size: u64,
@@ -185,7 +237,7 @@ struct Attrib {
     mtime: u32,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Stat {
     name: String,
     long_name: String,
@@ -319,6 +371,20 @@ impl SftpSession {
         self.process_stat(id);
     }
 
+    fn process_open(&mut self, id: u32) {
+        let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
+        let pflags = deq_get_u32(&mut self.ideq).expect("parse flags");
+        let a = decode_attrib(&mut self.ideq).expect("parse attrib");
+
+        info!(
+            "process_open '{}' flags '{:x}' attr: {:?}",
+            &path, pflags, &a
+        );
+        // FIXME: add the actual open
+
+        self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+    }
+
     fn process_realpath(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         info!("process_realpath {}", &path);
@@ -395,6 +461,7 @@ impl SftpSession {
                         SSH2_FXP_REALPATH => self.process_realpath(id),
                         SSH2_FXP_STAT => self.process_stat(id),
                         SSH2_FXP_LSTAT => self.process_lstat(id),
+                        SSH2_FXP_OPEN => self.process_open(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
                     }
                 }
