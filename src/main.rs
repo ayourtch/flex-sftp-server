@@ -354,12 +354,37 @@ impl SftpSession {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         info!("process_stat {}", &path);
         match std::fs::metadata(&path) {
-            Ok(attr) => {
-                let mut att = Attrib {
+            Ok(meta) => {
+                use std::time::SystemTime;
+                let mut a = Attrib {
                     ..Default::default()
                 };
                 /* FIXME - fill attrib */
-                self.send_attrib(id, &att);
+                a.flags = SSH2_FILEXFER_ATTR_SIZE
+                    | SSH2_FILEXFER_ATTR_UIDGID
+                    | SSH2_FILEXFER_ATTR_PERMISSIONS
+                    | SSH2_FILEXFER_ATTR_ACMODTIME;
+                a.size = meta.len();
+                a.uid = 0; // FIXME
+                a.gid = 0; // FIXME
+                if meta.is_file() {
+                    a.perm = 0x8000;
+                } else if meta.is_dir() {
+                    a.perm = 0x4000;
+                }
+                a.mtime = meta
+                    .modified()
+                    .unwrap()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as u32;
+                a.atime = meta
+                    .accessed()
+                    .unwrap()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as u32;
+                self.send_attrib(id, &a);
             }
             Err(err) => {
                 self.send_status(id, SSH2_FX_FAILURE);
