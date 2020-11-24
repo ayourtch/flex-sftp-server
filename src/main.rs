@@ -39,6 +39,19 @@ fn deq_get_u32(ideq: &mut VecDeque<u8>) -> Option<u32> {
     Some(out)
 }
 
+fn deq_peek_u32(ideq: &mut VecDeque<u8>) -> Option<u32> {
+    let mut out: u32 = 0;
+    for i in 0..4 {
+        out = out << 8;
+        let nxt = ideq.get(i);
+        if nxt.is_none() {
+            return None;
+        }
+        out = out + (*nxt.unwrap() as u32);
+    }
+    Some(out)
+}
+
 fn deq_get_u16(ideq: &mut VecDeque<u8>) -> Option<u16> {
     let mut out: u16 = 0;
     for _i in 0..2 {
@@ -432,14 +445,44 @@ impl SftpSession {
         self.process_stat(id);
     }
 
+    fn process_close(&mut self, id: u32) {
+        let handle = deq_get_handle(&mut self.ideq).expect("handle");
+        info!("process_close handle {}", &handle);
+
+        let mut status = SSH2_FX_OK;
+
+        match self.handles.get_mut(&handle) {
+            None => {
+                info!("Handle {} not found", handle);
+                self.send_status(id, SSH2_FX_FAILURE);
+            }
+            Some(h) => match h.obj {
+                HandleObj::File(ref mut f) => {
+                    if let Err(err) = f.sync_all() {
+                        info!("Error closing handle: {:?}", &err);
+                        status = SSH2_FX_FAILURE;
+                    }
+                }
+                _ => {
+                    info!("not a file handle");
+                    status = SSH2_FX_FAILURE;
+                }
+            },
+        }
+        self.handles.remove(&handle);
+        self.send_status(id, status);
+    }
+
     fn process_write(&mut self, id: u32) {
         let handle = deq_get_handle(&mut self.ideq).expect("handle");
         let off = deq_get_u64(&mut self.ideq).expect("offset");
         let data = deq_get_string(&mut self.ideq).expect("data");
 
         info!(
-            "process_write handle {} off {} len data {:?}",
-            &handle, &off, &data
+            "process_write handle {} off {} data len {} bytes",
+            &handle,
+            &off,
+            &data.len()
         );
 
         match self.handles.get_mut(&handle) {
@@ -519,6 +562,7 @@ impl SftpSession {
                 let my_handle_id = self.next_handle_id;
                 self.next_handle_id = self.next_handle_id + 1;
                 self.handles.insert(my_handle_id, handle);
+                info!("Handle: {}", my_handle_id);
                 self.send_handle(id, my_handle_id);
             }
             Err(err) => {
@@ -554,22 +598,26 @@ impl SftpSession {
     }
 
     fn process(&mut self) {
-        info!("process ideq: {:?}", &self.ideq);
+        self.ideq.make_contiguous();
+        info!("process ideq: {:?}", &self.ideq.len());
         let buf_len = self.ideq.len();
         if buf_len < 5 {
             /* incomplete message */
             return;
         }
-        let msg_len = deq_get_u32(&mut self.ideq).unwrap() as usize;
+        let msg_len = deq_peek_u32(&mut self.ideq).unwrap() as usize;
         if msg_len > SFTP_MAX_MSG_LENGTH {
+            info!("SSH message length {} > {}", msg_len, SFTP_MAX_MSG_LENGTH);
             panic!("SSH message length {} > {}", msg_len, SFTP_MAX_MSG_LENGTH);
         }
+        let buf_len = buf_len - 4;
 
-        if buf_len < msg_len + 4 {
+        if buf_len < msg_len {
+            info!("buf_len {} < {}, incomplete", buf_len, msg_len);
             /* incomplete message */
             return;
         }
-        let buf_len = buf_len - 4;
+        let msg_len = deq_get_u32(&mut self.ideq).unwrap() as usize;
 
         let msg_type = deq_get_u8(&mut self.ideq).unwrap();
         info!("Process message type: {}", &msg_type);
@@ -606,6 +654,7 @@ impl SftpSession {
                         SSH2_FXP_LSTAT => self.process_lstat(id),
                         SSH2_FXP_OPEN => self.process_open(id),
                         SSH2_FXP_WRITE => self.process_write(id),
+                        SSH2_FXP_CLOSE => self.process_close(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
                     }
                 }
@@ -613,15 +662,19 @@ impl SftpSession {
         }
 
         if buf_len < self.ideq.len() {
+            info!("unexpected growth of the input buffer");
             panic!("Unexpected growth of the input buffer");
         }
         let consumed = buf_len - self.ideq.len();
         if msg_len < consumed {
+            info!("msg_len {} < consumed {}", msg_len, consumed);
             panic!("msg_len {} < consumed {}", msg_len, consumed);
         }
         if msg_len > consumed {
+            info!("Consume: {}", msg_len - consumed);
             deq_consume(&mut self.ideq, msg_len - consumed);
         }
+        info!("after process ideq: {:?}", &self.ideq.len());
     }
 
     fn odeq_set_events(&mut self) {
@@ -684,7 +737,7 @@ impl SftpSession {
                         Err(err) => panic!(err),
                     }
                     if event.hangup {
-                        std::process::exit(42);
+                        std::process::exit(0);
                     }
                 }
                 if event.writable {
