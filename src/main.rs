@@ -300,6 +300,7 @@ impl SftpSession {
 
     fn process_stat(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
+        info!("process_stat {}", &path);
         match std::fs::metadata(&path) {
             Ok(attr) => {
                 let mut att = Attrib {
