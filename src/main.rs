@@ -41,6 +41,15 @@ fn deq_get_u8(ideq: &mut VecDeque<u8>) -> Option<u8> {
     ideq.pop_front()
 }
 
+fn deq_get_cstring(ideq: &mut VecDeque<u8>) -> Option<String> {
+    let str_len = deq_get_u32(ideq)? as usize;
+    let mut out = String::with_capacity(str_len);
+    for _i in 0..str_len {
+        out.push(ideq.pop_front()? as char);
+    }
+    Some(out)
+}
+
 fn deq_put_u8(odeq: &mut VecDeque<u8>, val: u8) {
     odeq.push_back(val);
 }
@@ -53,11 +62,52 @@ fn deq_put_u32(odeq: &mut VecDeque<u8>, val: u32) {
     }
 }
 
+fn deq_put_u64(odeq: &mut VecDeque<u8>, val: u64) {
+    let mut val = val;
+    for _i in 0..8 {
+        odeq.push_back((val >> (24 + 32)) as u8);
+        val = (val & 0xffffffffffffff) << 8;
+    }
+}
+
 fn deq_put_cstring(odeq: &mut VecDeque<u8>, str: &str) {
     let b = str.as_bytes();
     deq_put_u32(odeq, b.len() as u32);
     for i in 0..b.len() {
         deq_put_u8(odeq, b[i]);
+    }
+}
+
+/* attributes */
+const SSH2_FILEXFER_ATTR_SIZE: u32 = 0x00000001;
+const SSH2_FILEXFER_ATTR_UIDGID: u32 = 0x00000002;
+const SSH2_FILEXFER_ATTR_PERMISSIONS: u32 = 0x00000004;
+const SSH2_FILEXFER_ATTR_ACMODTIME: u32 = 0x00000008;
+const SSH2_FILEXFER_ATTR_EXTENDED: u32 = 0x80000000;
+
+/* portable open modes */
+const SSH2_FXF_READ: u32 = 0x00000001;
+const SSH2_FXF_WRITE: u32 = 0x00000002;
+const SSH2_FXF_APPEND: u32 = 0x00000004;
+const SSH2_FXF_CREAT: u32 = 0x00000008;
+const SSH2_FXF_TRUNC: u32 = 0x00000010;
+const SSH2_FXF_EXCL: u32 = 0x00000020;
+
+fn encode_attrib(odeq: &mut VecDeque<u8>, a: &Attrib) {
+    deq_put_u32(odeq, a.flags);
+    if a.flags & SSH2_FILEXFER_ATTR_SIZE != 0 {
+        deq_put_u64(odeq, a.size);
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_UIDGID != 0 {
+        deq_put_u32(odeq, a.uid);
+        deq_put_u32(odeq, a.gid);
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS != 0 {
+        deq_put_u32(odeq, a.perm);
+    }
+    if a.flags & SSH2_FILEXFER_ATTR_ACMODTIME != 0 {
+        deq_put_u32(odeq, a.atime);
+        deq_put_u32(odeq, a.mtime);
     }
 }
 
@@ -114,12 +164,31 @@ const SSH2_FXP_EXTENDED_REPLY: u8 = 201;
 
 const SSH2_FX_PERMISSION_DENIED: u32 = 3;
 
+#[derive(Default)]
+struct Attrib {
+    flags: u32,
+    size: u64,
+    uid: u32,
+    gid: u32,
+    perm: u32,
+    atime: u32,
+    mtime: u32,
+}
+
+#[derive(Default)]
+struct Stat {
+    name: String,
+    long_name: String,
+    attrib: Attrib,
+}
+
 struct SftpSession {
     ideq: VecDeque<u8>,
     odeq: VecDeque<u8>,
     init_done: bool,
     odeq_registered: bool,
     sources: Sources<String>,
+    is_readonly: bool,
     client_version: u32,
 }
 
@@ -145,6 +214,7 @@ impl SftpSession {
             odeq_registered: false,
             sources,
             client_version: 0,
+            is_readonly: false,
         }
     }
 
@@ -194,6 +264,46 @@ impl SftpSession {
         deq_put_deq(&mut self.odeq, &mut tdeq);
     }
 
+    fn send_names(&mut self, id: u32, names: &Vec<Stat>) {
+        let mut tdeq = VecDeque::<u8>::new();
+        deq_put_u8(&mut tdeq, SSH2_FXP_NAME);
+        deq_put_u32(&mut tdeq, id);
+        deq_put_u32(&mut tdeq, names.len() as u32);
+
+        for name in names {
+            deq_put_cstring(&mut tdeq, &name.name);
+            deq_put_cstring(&mut tdeq, &name.long_name);
+            encode_attrib(&mut tdeq, &name.attrib);
+        }
+
+        deq_put_deq(&mut self.odeq, &mut tdeq);
+    }
+
+    fn process_realpath(&mut self, id: u32) {
+        let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
+        info!("process_realpath {}", &path);
+
+        if path == "" {
+            path = ".".to_string();
+        }
+
+        match std::fs::canonicalize(&path) {
+            Ok(real_path) => {
+                let real_path = real_path.to_str().unwrap().to_string();
+                let names = vec![Stat {
+                    name: real_path.clone(),
+                    long_name: real_path.clone(),
+                    ..Default::default()
+                }];
+                self.send_names(id, &names);
+            }
+            Err(err) => {
+                /* FIXME  - errno to portable */
+                self.send_status(id, 42);
+            }
+        }
+    }
+
     fn process(&mut self) {
         info!("process ideq: {:?}", &self.ideq);
         let buf_len = self.ideq.len();
@@ -238,9 +348,13 @@ impl SftpSession {
                     | SSH2_FXP_STAT | SSH2_FXP_READLINK => false,
                     _ => true, /* be conservative */
                 };
-
-                match msg_type {
-                    _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
+                if self.is_readonly && does_write {
+                    self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+                } else {
+                    match msg_type {
+                        SSH2_FXP_REALPATH => self.process_realpath(id),
+                        _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
+                    }
                 }
             }
         }
