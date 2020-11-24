@@ -454,11 +454,6 @@ impl SftpSession {
             // Iterate over source events. Since we only have one source
             // registered, this will only iterate once.
             for (key, event) in events.iter() {
-                eprintln!("key: {:?} Ev: {:?}", &key, &event);
-                info!(
-                    "Ideq free capacity: {}",
-                    self.ideq.capacity() - self.ideq.len()
-                );
                 // The standard input has data ready to be read.
                 if event.readable || event.hangup {
                     let mut buf = [0u8; 16384];
