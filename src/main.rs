@@ -81,11 +81,33 @@ const SSH2_FILEXFER_VERSION: u32 = 3;
 
 /* client to server */
 const SSH2_FXP_INIT: u8 = 1;
+const SSH2_FXP_OPEN: u8 = 3;
+const SSH2_FXP_CLOSE: u8 = 4;
+const SSH2_FXP_READ: u8 = 5;
+const SSH2_FXP_WRITE: u8 = 6;
+const SSH2_FXP_LSTAT: u8 = 7;
+const SSH2_FXP_STAT_VERSION_0: u8 = 7;
+const SSH2_FXP_FSTAT: u8 = 8;
+const SSH2_FXP_SETSTAT: u8 = 9;
+const SSH2_FXP_FSETSTAT: u8 = 10;
+const SSH2_FXP_OPENDIR: u8 = 11;
+const SSH2_FXP_READDIR: u8 = 12;
+const SSH2_FXP_REMOVE: u8 = 13;
+const SSH2_FXP_MKDIR: u8 = 14;
+const SSH2_FXP_RMDIR: u8 = 15;
+const SSH2_FXP_REALPATH: u8 = 16;
+const SSH2_FXP_STAT: u8 = 17;
+const SSH2_FXP_RENAME: u8 = 18;
+const SSH2_FXP_READLINK: u8 = 19;
+const SSH2_FXP_SYMLINK: u8 = 20;
 
 /* server to client */
 const SSH2_FXP_VERSION: u8 = 2;
-
 const SSH2_FXP_STATUS: u8 = 101;
+const SSH2_FXP_HANDLE: u8 = 102;
+const SSH2_FXP_DATA: u8 = 103;
+const SSH2_FXP_NAME: u8 = 104;
+const SSH2_FXP_ATTRS: u8 = 105;
 
 const SSH2_FXP_EXTENDED: u8 = 200;
 const SSH2_FXP_EXTENDED_REPLY: u8 = 201;
@@ -181,7 +203,6 @@ impl SftpSession {
             return;
         }
         let msg_len = deq_get_u32(&mut self.ideq).unwrap() as usize;
-        info!("process ideq after get32: {:?}", &self.ideq);
         if msg_len > SFTP_MAX_MSG_LENGTH {
             panic!("SSH message length {} > {}", msg_len, SFTP_MAX_MSG_LENGTH);
         }
@@ -212,7 +233,16 @@ impl SftpSession {
                     panic!("Received {} request before init", other_type);
                 }
                 let id = deq_get_u32(&mut self.ideq).expect("Could not parse ID");
-                self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+                let does_write = match msg_type {
+                    SSH2_FXP_OPEN | SSH2_FXP_CLOSE | SSH2_FXP_READ | SSH2_FXP_LSTAT
+                    | SSH2_FXP_FSTAT | SSH2_FXP_OPENDIR | SSH2_FXP_READDIR | SSH2_FXP_REALPATH
+                    | SSH2_FXP_STAT | SSH2_FXP_READLINK => false,
+                    _ => true, /* be conservative */
+                };
+
+                match msg_type {
+                    _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
+                }
             }
         }
 
