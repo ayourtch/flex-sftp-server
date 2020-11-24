@@ -61,6 +61,7 @@ name = "flex-sftp-server"
 version = "0.1.0"
 dependencies = [
  "log",
+ "popol",
  "syslog",
 ]
 
@@ -100,6 +101,15 @@ name = "object"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d3b63360ec3cb337817c2dbd47ab4a0f170d285d8e5a2064600f3def1402397"
+
+[[package]]
+name = "popol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53bb69490e466db39a4442cc36fa3a593cbe94f688c55ecd2568dc1535c4fabf"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "rustc-demangle"
