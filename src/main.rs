@@ -74,6 +74,14 @@ fn deq_get_string(ideq: &mut VecDeque<u8>) -> Option<Vec<u8>> {
     Some(out)
 }
 
+fn deq_get_handle(ideq: &mut VecDeque<u8>) -> Option<u32> {
+    let str_len = deq_get_u32(ideq)? as usize;
+    if str_len != 4 {
+        return None;
+    };
+    deq_get_u32(ideq)
+}
+
 fn deq_put_u8(odeq: &mut VecDeque<u8>, val: u8) {
     odeq.push_back(val);
 }
@@ -424,6 +432,63 @@ impl SftpSession {
         self.process_stat(id);
     }
 
+    fn process_write(&mut self, id: u32) {
+        let handle = deq_get_handle(&mut self.ideq).expect("handle");
+        let off = deq_get_u64(&mut self.ideq).expect("offset");
+        let data = deq_get_string(&mut self.ideq).expect("data");
+
+        info!(
+            "process_write handle {} off {} len data {:?}",
+            &handle, &off, &data
+        );
+
+        match self.handles.get_mut(&handle) {
+            None => {
+                info!("Handle {} not found", handle);
+                self.send_status(id, SSH2_FX_FAILURE);
+            }
+            Some(h) => match h.obj {
+                HandleObj::File(ref mut f) => {
+                    if h.pflags & SSH2_FXF_APPEND != 0 {
+                        use std::io::{Seek, SeekFrom};
+                        match f.seek(SeekFrom::End(0)) {
+                            Ok(pos) => {
+                                info!("seek ok to pos {}", pos);
+                                match f.write(&data[..]) {
+                                    Ok(n) => {
+                                        self.send_status(id, SSH2_FX_OK);
+                                    }
+                                    Err(err) => {
+                                        info!("error writing: {:?}", err);
+                                        self.send_status(id, SSH2_FX_FAILURE);
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                info!("seek failed");
+                                self.send_status(id, SSH2_FX_FAILURE);
+                            }
+                        }
+                    } else {
+                        match f.write(&data[..]) {
+                            Ok(n) => {
+                                self.send_status(id, SSH2_FX_OK);
+                            }
+                            Err(err) => {
+                                info!("error writing: {:?}", err);
+                                self.send_status(id, SSH2_FX_FAILURE);
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    info!("Not a file object");
+                    self.send_status(id, SSH2_FX_FAILURE);
+                }
+            },
+        }
+    }
+
     fn process_open(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         let pflags = deq_get_u32(&mut self.ideq).expect("parse flags");
@@ -540,6 +605,7 @@ impl SftpSession {
                         SSH2_FXP_STAT => self.process_stat(id),
                         SSH2_FXP_LSTAT => self.process_lstat(id),
                         SSH2_FXP_OPEN => self.process_open(id),
+                        SSH2_FXP_WRITE => self.process_write(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
                     }
                 }
