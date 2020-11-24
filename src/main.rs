@@ -3,12 +3,14 @@ extern crate syslog;
 extern crate log;
 extern crate popol;
 use std::collections::VecDeque;
+use std::fs::{File, ReadDir};
 use std::io;
 use std::io::{Read, Write};
 use std::time::Duration;
 
 use log::{LevelFilter, SetLoggerError};
 use popol::Sources;
+use std::collections::HashMap;
 use syslog::{BasicLogger, Facility, Formatter3164};
 
 fn deq_get_u64(ideq: &mut VecDeque<u8>) -> Option<u64> {
@@ -226,6 +228,18 @@ const SSH2_FX_CONNECTION_LOST: u32 = 7;
 const SSH2_FX_OP_UNSUPPORTED: u32 = 8;
 const SSH2_FX_MAX: u32 = 8;
 
+enum HandleObj {
+    File(File),
+    ReadDir(ReadDir),
+    None,
+}
+
+struct ScpHandle {
+    obj: HandleObj,
+    pflags: u32,
+    path: String,
+}
+
 #[derive(Default, Debug)]
 struct Attrib {
     flags: u32,
@@ -252,6 +266,8 @@ struct SftpSession {
     sources: Sources<String>,
     is_readonly: bool,
     client_version: u32,
+    next_handle_id: u32,
+    handles: HashMap<u32, ScpHandle>,
 }
 
 impl SftpSession {
@@ -277,6 +293,8 @@ impl SftpSession {
             sources,
             client_version: 0,
             is_readonly: false,
+            next_handle_id: 1,
+            handles: HashMap::new(),
         }
     }
 
@@ -350,6 +368,16 @@ impl SftpSession {
         deq_put_deq(&mut self.odeq, &mut tdeq);
     }
 
+    fn send_handle(&mut self, id: u32, h: u32) {
+        let mut tdeq = VecDeque::<u8>::new();
+        deq_put_u8(&mut tdeq, SSH2_FXP_HANDLE);
+        deq_put_u32(&mut tdeq, id);
+        deq_put_u32(&mut tdeq, 4);
+        deq_put_u32(&mut tdeq, h);
+
+        deq_put_deq(&mut self.odeq, &mut tdeq);
+    }
+
     fn process_stat(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         info!("process_stat {}", &path);
@@ -402,12 +430,37 @@ impl SftpSession {
         let a = decode_attrib(&mut self.ideq).expect("parse attrib");
 
         info!(
-            "process_open '{}' flags '{:x}' attr: {:?}",
+            "process_open '{}' flags 0x{:08x} attr: {:?}",
             &path, pflags, &a
         );
         // FIXME: add the actual open
 
-        self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+        use std::fs::OpenOptions;
+
+        let file_res = OpenOptions::new()
+            .read(pflags & SSH2_FXF_READ != 0)
+            .write(pflags & SSH2_FXF_WRITE != 0)
+            .create(pflags & SSH2_FXF_CREAT != 0)
+            .append(pflags & SSH2_FXF_APPEND != 0)
+            .truncate(pflags & SSH2_FXF_TRUNC != 0)
+            .open(&path);
+        match file_res {
+            Ok(file) => {
+                let handle = ScpHandle {
+                    obj: HandleObj::File(file),
+                    path: path.clone(),
+                    pflags: pflags,
+                };
+                let my_handle_id = self.next_handle_id;
+                self.next_handle_id = self.next_handle_id + 1;
+                self.handles.insert(my_handle_id, handle);
+                self.send_handle(id, my_handle_id);
+            }
+            Err(err) => {
+                info!("Error opening {} : {:?}", &path, &err);
+                self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+            }
+        }
     }
 
     fn process_realpath(&mut self, id: u32) {
