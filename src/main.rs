@@ -199,7 +199,6 @@ impl SftpSession {
         let buf_len = self.ideq.len();
         if buf_len < 5 {
             /* incomplete message */
-            info!("incomplete message 0");
             return;
         }
         let msg_len = deq_get_u32(&mut self.ideq).unwrap() as usize;
@@ -208,10 +207,10 @@ impl SftpSession {
         }
 
         if buf_len < msg_len + 4 {
-            info!("incomplete message");
             /* incomplete message */
             return;
         }
+        let buf_len = buf_len - 4;
 
         let msg_type = deq_get_u8(&mut self.ideq).unwrap();
         info!("Process message type: {}", &msg_type);
