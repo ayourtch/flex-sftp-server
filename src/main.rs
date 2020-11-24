@@ -162,7 +162,17 @@ const SSH2_FXP_ATTRS: u8 = 105;
 const SSH2_FXP_EXTENDED: u8 = 200;
 const SSH2_FXP_EXTENDED_REPLY: u8 = 201;
 
+/* status messages */
+const SSH2_FX_OK: u32 = 0;
+const SSH2_FX_EOF: u32 = 1;
+const SSH2_FX_NO_SUCH_FILE: u32 = 2;
 const SSH2_FX_PERMISSION_DENIED: u32 = 3;
+const SSH2_FX_FAILURE: u32 = 4;
+const SSH2_FX_BAD_MESSAGE: u32 = 5;
+const SSH2_FX_NO_CONNECTION: u32 = 6;
+const SSH2_FX_CONNECTION_LOST: u32 = 7;
+const SSH2_FX_OP_UNSUPPORTED: u32 = 8;
+const SSH2_FX_MAX: u32 = 8;
 
 #[derive(Default)]
 struct Attrib {
@@ -279,6 +289,35 @@ impl SftpSession {
         deq_put_deq(&mut self.odeq, &mut tdeq);
     }
 
+    fn send_attrib(&mut self, id: u32, a: &Attrib) {
+        let mut tdeq = VecDeque::<u8>::new();
+        deq_put_u8(&mut tdeq, SSH2_FXP_ATTRS);
+        deq_put_u32(&mut tdeq, id);
+        encode_attrib(&mut tdeq, a);
+
+        deq_put_deq(&mut self.odeq, &mut tdeq);
+    }
+
+    fn process_stat(&mut self, id: u32) {
+        let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
+        match std::fs::metadata(&path) {
+            Ok(attr) => {
+                let mut att = Attrib {
+                    ..Default::default()
+                };
+                /* FIXME - fill attrib */
+                self.send_attrib(id, &att);
+            }
+            Err(err) => {
+                self.send_status(id, SSH2_FX_FAILURE);
+            }
+        }
+    }
+    fn process_lstat(&mut self, id: u32) {
+        // FIXME: put the actual lstat
+        self.process_stat(id);
+    }
+
     fn process_realpath(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         info!("process_realpath {}", &path);
@@ -353,6 +392,8 @@ impl SftpSession {
                 } else {
                     match msg_type {
                         SSH2_FXP_REALPATH => self.process_realpath(id),
+                        SSH2_FXP_STAT => self.process_stat(id),
+                        SSH2_FXP_LSTAT => self.process_lstat(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
                     }
                 }
