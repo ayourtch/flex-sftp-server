@@ -69,6 +69,12 @@ fn deq_put_deq(odeq: &mut VecDeque<u8>, ideq: &mut VecDeque<u8>) {
     }
 }
 
+fn deq_consume(ideq: &mut VecDeque<u8>, count: usize) {
+    for _i in 0..count {
+        ideq.pop_front().unwrap();
+    }
+}
+
 const SFTP_MAX_MSG_LENGTH: usize = 256 * 1024;
 
 const SSH2_FILEXFER_VERSION: u32 = 3;
@@ -208,6 +214,17 @@ impl SftpSession {
                 let id = deq_get_u32(&mut self.ideq).expect("Could not parse ID");
                 self.send_status(id, SSH2_FX_PERMISSION_DENIED);
             }
+        }
+
+        if buf_len < self.ideq.len() {
+            panic!("Unexpected growth of the input buffer");
+        }
+        let consumed = buf_len - self.ideq.len();
+        if msg_len < consumed {
+            panic!("msg_len {} < consumed {}", msg_len, consumed);
+        }
+        if msg_len > consumed {
+            deq_consume(&mut self.ideq, msg_len - consumed);
         }
     }
 
