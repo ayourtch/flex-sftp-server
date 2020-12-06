@@ -463,6 +463,9 @@ impl SftpSession {
                         status = SSH2_FX_FAILURE;
                     }
                 }
+                HandleObj::ReadDir(ref mut rd) => {
+                    info!("Closing directory {:?}", rd);
+                }
                 _ => {
                     info!("not a file handle");
                     status = SSH2_FX_FAILURE;
@@ -532,6 +535,34 @@ impl SftpSession {
         }
     }
 
+    fn insert_new_handle(&mut self, handle: ScpHandle) -> u32 {
+                let my_handle_id = self.next_handle_id;
+                self.next_handle_id = self.next_handle_id + 1;
+                self.handles.insert(my_handle_id, handle);
+                info!("Handle: {}", my_handle_id);
+                return my_handle_id;
+    }
+
+    fn process_opendir(&mut self, id: u32) {
+        let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
+        info!("Request {} opendir {}", id, &path);
+        match std::fs::read_dir(&path) {
+            Ok(rd) => {
+                let handle = ScpHandle {
+                    obj: HandleObj::ReadDir(rd),
+                    path: path.clone(),
+                    pflags: 0,
+                };
+                let my_handle_id = self.insert_new_handle(handle);
+                self.send_handle(id, my_handle_id);
+            }
+            Err(err) => {
+                info!("Error opening {} : {:?}", &path, &err);
+                self.send_status(id, SSH2_FX_PERMISSION_DENIED);
+            }
+        }
+    }
+
     fn process_open(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         let pflags = deq_get_u32(&mut self.ideq).expect("parse flags");
@@ -559,10 +590,7 @@ impl SftpSession {
                     path: path.clone(),
                     pflags: pflags,
                 };
-                let my_handle_id = self.next_handle_id;
-                self.next_handle_id = self.next_handle_id + 1;
-                self.handles.insert(my_handle_id, handle);
-                info!("Handle: {}", my_handle_id);
+                let my_handle_id = self.insert_new_handle(handle);
                 self.send_handle(id, my_handle_id);
             }
             Err(err) => {
@@ -599,7 +627,10 @@ impl SftpSession {
 
     fn process(&mut self) {
         self.ideq.make_contiguous();
-        info!("process ideq: {:?}", &self.ideq.len());
+        info!("processing ideq len: {}", self.ideq.len());
+        for i in 0..self.ideq.len() {
+            info!("ideq[{}] = {}", i, self.ideq[i]);
+        }
         let buf_len = self.ideq.len();
         if buf_len < 5 {
             /* incomplete message */
@@ -653,6 +684,7 @@ impl SftpSession {
                         SSH2_FXP_STAT => self.process_stat(id),
                         SSH2_FXP_LSTAT => self.process_lstat(id),
                         SSH2_FXP_OPEN => self.process_open(id),
+                        SSH2_FXP_OPENDIR => self.process_opendir(id),
                         SSH2_FXP_WRITE => self.process_write(id),
                         SSH2_FXP_CLOSE => self.process_close(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
@@ -728,7 +760,10 @@ impl SftpSession {
                     match io::stdin().read(&mut buf[..]) {
                         Ok(n) => {
                             self.ideq.reserve(n);
+                            let mut i = 0;
                             for c in &buf[..n] {
+                                info!("push #{} into ideq: {} ('{}')", i, *c, *c as char);
+                                i = i + 1;
                                 self.ideq.push_back(*c);
                             }
 
