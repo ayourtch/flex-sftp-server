@@ -13,11 +13,33 @@ use popol::Sources;
 use std::collections::HashMap;
 use syslog::{BasicLogger, Facility, Formatter3164};
 
+fn ideq_x_pop_front(ideq: &mut VecDeque<u8>) -> Option<u8> {
+    eprintln!("!BUG!  let x = deq.pop_front();");
+    eprintln!("!BUG!  println!(\"pop: {}\", x);", "{:02x}");
+    ideq.pop_front()
+}
+
+fn ideq_x_push_back(ideq: &mut VecDeque<u8>, x: u8) {
+    eprintln!("!BUG!  println!(\"push : {:02x}\");", x);
+    eprintln!("!BUG!  deq.push_back({});", x);
+    ideq.push_back(x);
+}
+
+fn ideq_x_reserve(ideq: &mut VecDeque<u8>, sz: usize) {
+    eprintln!("!BUG!  deq.reserve({});", sz);
+    ideq.reserve(sz);
+}
+
+fn ideq_x_make_contiguous(ideq: &mut VecDeque<u8>) {
+    eprintln!("!BUG!  deq.make_contiguous();");
+    ideq.make_contiguous();
+}
+
 fn deq_get_u64(ideq: &mut VecDeque<u8>) -> Option<u64> {
     let mut out: u64 = 0;
     for _i in 0..8 {
         out = out << 8;
-        let nxt = ideq.pop_front();
+        let nxt = ideq_x_pop_front(ideq);
         if nxt.is_none() {
             return None;
         }
@@ -30,7 +52,7 @@ fn deq_get_u32(ideq: &mut VecDeque<u8>) -> Option<u32> {
     let mut out: u32 = 0;
     for _i in 0..4 {
         out = out << 8;
-        let nxt = ideq.pop_front();
+        let nxt = ideq_x_pop_front(ideq);
         if nxt.is_none() {
             return None;
         }
@@ -56,7 +78,7 @@ fn deq_get_u16(ideq: &mut VecDeque<u8>) -> Option<u16> {
     let mut out: u16 = 0;
     for _i in 0..2 {
         out = out << 8;
-        let nxt = ideq.pop_front();
+        let nxt = ideq_x_pop_front(ideq);
         if nxt.is_none() {
             return None;
         }
@@ -66,14 +88,14 @@ fn deq_get_u16(ideq: &mut VecDeque<u8>) -> Option<u16> {
 }
 
 fn deq_get_u8(ideq: &mut VecDeque<u8>) -> Option<u8> {
-    ideq.pop_front()
+    ideq_x_pop_front(ideq)
 }
 
 fn deq_get_cstring(ideq: &mut VecDeque<u8>) -> Option<String> {
     let str_len = deq_get_u32(ideq)? as usize;
     let mut out = String::with_capacity(str_len);
     for _i in 0..str_len {
-        out.push(ideq.pop_front()? as char);
+        out.push(ideq_x_pop_front(ideq)? as char);
     }
     Some(out)
 }
@@ -82,7 +104,7 @@ fn deq_get_string(ideq: &mut VecDeque<u8>) -> Option<Vec<u8>> {
     let str_len = deq_get_u32(ideq)? as usize;
     let mut out = Vec::<u8>::with_capacity(str_len);
     for _i in 0..str_len {
-        out.push(ideq.pop_front()?);
+        out.push(ideq_x_pop_front(ideq)?);
     }
     Some(out)
 }
@@ -190,13 +212,13 @@ fn deq_put_deq(odeq: &mut VecDeque<u8>, ideq: &mut VecDeque<u8>) {
     let len = ideq.len() as u32;
     deq_put_u32(odeq, len);
     while ideq.len() > 0 {
-        odeq.push_back(ideq.pop_front().unwrap());
+        odeq.push_back(ideq_x_pop_front(ideq).unwrap());
     }
 }
 
 fn deq_consume(ideq: &mut VecDeque<u8>, count: usize) {
     for _i in 0..count {
-        ideq.pop_front().unwrap();
+        ideq_x_pop_front(ideq).unwrap();
     }
 }
 
@@ -626,7 +648,7 @@ impl SftpSession {
     }
 
     fn process(&mut self) {
-        self.ideq.make_contiguous();
+        ideq_x_make_contiguous(&mut self.ideq);
         info!("processing ideq len: {}", self.ideq.len());
         for i in 0..self.ideq.len() {
             info!("ideq[{}] = {}", i, self.ideq[i]);
@@ -759,12 +781,12 @@ impl SftpSession {
                     // Read what we can from standard input
                     match io::stdin().read(&mut buf[..]) {
                         Ok(n) => {
-                            self.ideq.reserve(n);
+                            ideq_x_reserve(&mut self.ideq, n);
                             let mut i = 0;
                             for c in &buf[..n] {
                                 info!("push #{} into ideq: {} ('{}')", i, *c, *c as char);
                                 i = i + 1;
-                                self.ideq.push_back(*c);
+                                ideq_x_push_back(&mut self.ideq, *c);
                             }
 
                             /* echo */
