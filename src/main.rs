@@ -707,7 +707,8 @@ impl SftpSession {
                 Ok(()) => {}
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
                     eprintln!("time out...");
-                    info!("ideq: {:?}", &self.ideq);
+                    info!("timeout. ideq len: {}", self.ideq.len());
+                    info!("---");
                     continue;
                 }
                 Err(err) => {
