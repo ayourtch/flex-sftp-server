@@ -543,6 +543,71 @@ impl SftpSession {
         return my_handle_id;
     }
 
+    fn dir_entry_to_stat(ent: std::fs::DirEntry) -> Option<Stat> {
+        match ent.file_name().to_str() {
+            Some(real_path) => {
+                let name = real_path.to_string();
+                Some(Stat {
+                    name: name.clone(),
+                    long_name: name.clone(), // FIXME: this needs to be long output
+                    ..Default::default()
+                })
+            }
+            None => None,
+        }
+    }
+
+    fn process_readdir(&mut self, id: u32) {
+        let handle = deq_get_handle(&mut self.ideq).expect("handle");
+        info!("process_readdir handle {}", &handle);
+
+        let mut status = SSH2_FX_OK;
+        let mut names: Vec<Stat> = vec![];
+
+        match self.handles.get_mut(&handle) {
+            None => {
+                info!("Handle {} not found", handle);
+                self.send_status(id, SSH2_FX_FAILURE);
+                return;
+            }
+            Some(h) => match h.obj {
+                HandleObj::File(ref mut f) => {
+                    info!("Attempting a readdir on file handle: {:?}", &f);
+                    self.send_status(id, SSH2_FX_FAILURE);
+                    return;
+                }
+                HandleObj::ReadDir(ref mut rd) => {
+                    info!("Reading directory {:?}", rd);
+                    while names.len() < 100 {
+                        match rd.next() {
+                            None => break,
+                            Some(entry) => match entry {
+                                Err(e) => info!("Error {:?} while readdir", e),
+                                Ok(ent) => match Self::dir_entry_to_stat(ent) {
+                                    Some(st) => {
+                                        names.push(st);
+                                    }
+                                    None => {}
+                                },
+                            },
+                        }
+                    }
+                }
+                _ => {
+                    info!("not a file handle");
+                    self.send_status(id, SSH2_FX_FAILURE);
+                    return;
+                }
+            },
+        }
+
+        if names.len() > 0 {
+            self.send_names(id, &names);
+        } else {
+            self.send_status(id, SSH2_FX_EOF);
+        }
+    }
+
     fn process_opendir(&mut self, id: u32) {
         let mut path = deq_get_cstring(&mut self.ideq).expect("parse cstring");
         info!("Request {} opendir {}", id, &path);
@@ -685,6 +750,7 @@ impl SftpSession {
                         SSH2_FXP_LSTAT => self.process_lstat(id),
                         SSH2_FXP_OPEN => self.process_open(id),
                         SSH2_FXP_OPENDIR => self.process_opendir(id),
+                        SSH2_FXP_READDIR => self.process_readdir(id),
                         SSH2_FXP_WRITE => self.process_write(id),
                         SSH2_FXP_CLOSE => self.process_close(id),
                         _ => self.send_status(id, SSH2_FX_PERMISSION_DENIED),
