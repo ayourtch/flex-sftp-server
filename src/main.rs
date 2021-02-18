@@ -762,7 +762,7 @@ impl SftpSession {
                             self.ideq.reserve(n);
                             let mut i = 0;
                             for c in &buf[..n] {
-                                info!("push #{} into ideq: {} ('{}')", i, *c, *c as char);
+                                // info!("push #{} into ideq: {} ('{}')", i, *c, *c as char);
                                 i = i + 1;
                                 self.ideq.push_back(*c);
                             }
@@ -779,7 +779,7 @@ impl SftpSession {
                 if event.writable {
                     self.odeq.make_contiguous();
                     // let maxlen = self.odeq.len();
-                    info!("Writing odeq: {:?}", &self.odeq);
+                    // info!("Writing odeq: {:?}", &self.odeq);
                     match io::stdout().write(&self.odeq.as_slices().0) {
                         Ok(n) => {
                             /* this was written, get rid of it */
