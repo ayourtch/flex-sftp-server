@@ -536,11 +536,11 @@ impl SftpSession {
     }
 
     fn insert_new_handle(&mut self, handle: ScpHandle) -> u32 {
-                let my_handle_id = self.next_handle_id;
-                self.next_handle_id = self.next_handle_id + 1;
-                self.handles.insert(my_handle_id, handle);
-                info!("Handle: {}", my_handle_id);
-                return my_handle_id;
+        let my_handle_id = self.next_handle_id;
+        self.next_handle_id = self.next_handle_id + 1;
+        self.handles.insert(my_handle_id, handle);
+        info!("Handle: {}", my_handle_id);
+        return my_handle_id;
     }
 
     fn process_opendir(&mut self, id: u32) {
