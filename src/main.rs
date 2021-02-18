@@ -736,7 +736,7 @@ impl SftpSession {
                 .sources
                 .wait_timeout(&mut events, Duration::from_secs(30))
             {
-                Ok(()) => {}
+                Ok(()) => { /* nothing */ }
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
                     eprintln!("time out...");
                     // info!("timeout. ideq len: {}", self.ideq.len());
@@ -759,7 +759,7 @@ impl SftpSession {
                     // Read what we can from standard input
                     match io::stdin().read(&mut buf[..]) {
                         Ok(n) => {
-                            self.ideq.reserve(n);
+                            // self.ideq.reserve(n);
                             let mut i = 0;
                             for c in &buf[..n] {
                                 // info!("push #{} into ideq: {} ('{}')", i, *c, *c as char);
