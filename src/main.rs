@@ -734,13 +734,13 @@ impl SftpSession {
             // ready before then, process its events. Otherwise, timeout.
             match self
                 .sources
-                .wait_timeout(&mut events, Duration::from_secs(1))
+                .wait_timeout(&mut events, Duration::from_secs(30))
             {
                 Ok(()) => {}
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
                     eprintln!("time out...");
-                    info!("timeout. ideq len: {}", self.ideq.len());
-                    info!("---");
+                    // info!("timeout. ideq len: {}", self.ideq.len());
+                    // info!("---");
                     continue;
                 }
                 Err(err) => {
